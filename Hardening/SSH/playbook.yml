@@ -1,0 +1,112 @@
+- name: Installing required packages
+  hosts: localhost
+  tasks:
+    - name: Installing {{ item.name }}
+      ansible.builtin.dnf:
+        name: '{{ item.name }}'
+        state: '{{ item.state }}'
+      loop:
+        - name: epel-release
+          state: present
+        - name: policycoreutils-python-utils
+          state: present
+
+- name: Modify sshd configurations
+  hosts: localhost
+  tasks:
+    - name: Modifying /etc/ssh/sshd_config file
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '{{ item.regexp }}'
+        line: '{{ item.line }}'
+        backrefs: true
+      loop:
+        - regexp: '(P|# P|#P)ermitRootLogin [a-z\-]+$'
+          line: 'PermitRootLogin no'
+        - regexp: '(P|# P|#P)ermitEmptyPasswords [a-z\-]+$'
+          line: 'PermitEmptyPasswords no'
+        - regexp: '(P|# P|#P)asswordAuthentication [a-z]+$'
+          line: 'PasswordAuthentication no'
+        - regexp: '(P|# P|#P)ort [0-9]{1,5}$'
+          line: 'Port {{ new_port }}'
+        - regexp: '(A|# A|#A)llowTcpForwarding [a-z]+$'
+          line: 'AllowTcpForwarding no'
+        - regexp: '(P|# P|#P)ermitTunnel [a-z]+$'
+          line: 'PermitTunnel no'
+        - regexp: '(G|# G|#G)atewayPorts [a-z]+$'
+          line: 'GatewayPorts no'
+        - regexp: '(C|# C|#C)lientAliveInterval [0-9]+$'
+          line: 'ClientAliveInterval 100'
+        - regexp: '(C|# C|#C)lientAliveCountMax [0-9]+$'
+          line: 'ClientAliveCountMax 0'
+        - regexp: '(M|# M|#M)axSessions [0-9]+$'
+          line: 'MaxSessions 5'
+        - regexp: '(M|# M|#M)axStartups [0-9]+:[0-9]+:[0-9]+$'
+          line: 'MaxStartups 5:30:10'
+        - regexp: '(L|# L|#L)oginGraceTime [0-9]+[a-z]+$'
+          line: 'LoginGraceTime 30'
+        - regexp: '(M|# M|#M)axAuthTries [0-9]+$'
+          line: 'MaxAuthTries 3'
+    - name: Append lines to /etc/ssh/sshd_config file
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          AllowStreamLocalForwarding no
+          AllowUsers {{ allowed_users }}
+          AuthenticationMethods publickey,keyboard-interactive
+    - name: Modifying other files
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config.d/50-redhat.conf
+        regexp: '{{ item.regexp }}'
+        line: '{{ item.line }}'
+        backrefs: true
+      loop:
+        - regexp: '(X|# X|#X)11Forwarding [a-z]+$'
+          line: 'X11Forwarding no'
+        - regexp: '(C|# C|#C)hallengeResponseAuthentication [a-z]+$'
+          line: 'ChallengeResponseAuthentication yes'
+
+- name: Modify /etc/pam.d/sshd for 2FA
+  hosts: localhost
+  tasks:
+    - name: Add Google Authenticator
+      ansible.builtin.blockinfile:
+        path: /etc/pam.d/sshd
+        block: |
+          auth required pam_google_authenticator.so secret=/home/{{ allowed_user }}/.ssh/google_authenticator
+    - name: To not enter password during login
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/sshd
+        regexp: 'auth +substack +password-auth'
+        line: '#auth substack password-auth'
+        backrefs: true
+
+- name: Firewall rules and SELinux policies
+  hosts: localhost
+  tasks:
+    - name: Allowing traffic from the new SSH port
+      ansible.posix.firewalld:
+        zone: public
+        permanent: true
+        port: '{{ new_port }}/tcp'
+        state: enabled
+    - name: Modifying SELinux policy
+      community.general.seport:
+        ports: '{{ new_port }}'
+        proto: tcp
+        setype: ssh_port_t
+        state: present
+    - name: Removing SSH service from public zone
+      ansible.posix.firewalld:
+        zone: public
+        permanent: true
+        service: ssh
+        state: disabled
+
+- name: Start and reload services
+  hosts: localhost
+  tasks:
+    - name: Reloading SSH to apply changes
+      ansible.builtin.systemd_service:
+        name: sshd.service
+        state: reloaded
