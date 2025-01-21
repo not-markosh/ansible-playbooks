@@ -90,6 +90,7 @@
         permanent: true
         port: '{{ new_port }}/tcp'
         state: enabled
+        immediate: true
     - name: Modifying SELinux policy
       community.general.seport:
         ports: '{{ new_port }}'
@@ -102,6 +103,7 @@
         permanent: true
         service: ssh
         state: disabled
+        immediate: true
 
 - name: Start and reload services
   hosts: localhost
